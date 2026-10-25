@@ -1,115 +1,79 @@
 
-"""
-AGENTE UMSA - Administración de Empresas
-GitHub Actions - Se despierta solo 7am hora La Paz (11am UTC)
-Stack: Telegram @umsa_admin_marketing_bot + Notion Videos Admi UMSA + Flow 50 creditos
-"""
-import os
-import json
-import requests
+import os, json, requests
 from datetime import datetime
 import pytz
 
-# --- TOKENS - Se leen de GitHub Secrets, no en codigo ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8657138596:AAEdUrRniE_E_o1TYnQ3xmLvLSpvLYqEOI")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")  # Tu chat ID para que te hable solo a ti
-NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
-NOTION_DB_ID = os.getenv("NOTION_DB_ID", "")
-EXA_API_KEY = os.getenv("EXA_API_KEY", "")
-FLOW_API_KEY = os.getenv("FLOW_API_KEY", "")
-
-# --- CONTROL 50 CREDITOS FLOW ---
-CREDITOS_MAX = 50
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 CREDITOS_FILE = "creditos_hoy.json"
 
 def get_creditos():
     try:
         with open(CREDITOS_FILE, "r") as f:
-            d = json.load(f)
-            if d["fecha"] == datetime.now().strftime("%Y-%m-%d"):
+            d=json.load(f)
+            if d["fecha"]==datetime.now().strftime("%Y-%m-%d"):
                 return d["usados"]
-    except:
-        pass
+    except: pass
     return 0
 
 def gastar_creditos(cant):
-    usados = get_creditos()
-    if usados + cant > CREDITOS_MAX:
-        msg = f"❌ LIMITE FLOW UMSA: Ya usaste {usados}/{CREDITOS_MAX}. Quedan {CREDITOS_MAX-usados}. Paro hasta mañana 7am."
-        enviar_telegram(msg)
+    usados=get_creditos()
+    if usados+cant>50:
         return False
-    with open(CREDITOS_FILE, "w") as f:
-        json.dump({"fecha": datetime.now().strftime("%Y-%m-%d"), "usados": usados+cant}, f)
+    with open(CREDITOS_FILE,"w") as f:
+        json.dump({"fecha":datetime.now().strftime("%Y-%m-%d"),"usados":usados+cant},f)
     return True
 
 def enviar_telegram(texto):
+    print(f"Intentando enviar Telegram a ChatID {TELEGRAM_CHAT_ID} con token {TELEGRAM_TOKEN[:10]}...")
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print(f"[TELEGRAM SIMULADO] {texto}")
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": texto, "parse_mode": "Markdown"})
+        print("ERROR: Falta TELEGRAM_TOKEN o TELEGRAM_CHAT_ID en Secrets")
+        return False
+    url=f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload={"chat_id":TELEGRAM_CHAT_ID,"text":texto,"parse_mode":"Markdown"}
+    try:
+        r=requests.post(url,json=payload,timeout=10)
+        print(f"Respuesta Telegram API: {r.status_code} - {r.text[:500]}")
+        if r.status_code==200:
+            print("✅ Mensaje enviado a Telegram OK")
+            return True
+        else:
+            print(f"❌ Error Telegram API: {r.text}")
+            return False
+    except Exception as e:
+        print(f"❌ Excepcion enviando Telegram: {e}")
+        return False
 
-# --- 3 TIPOS DE VIDEO NEUROMARKETING UMSA ---
-VIDEOS = {
-    "polemico": {
-        "tipo": "Polemico Viral",
-        "prompt_flow": "Video vertical 9:16, 8s, joven boliviano plaza Murillo La Paz, gesto 'para', texto rojo grande 'ESTUDIA ESTO SI QUIERES SER JEFE', corte a traje oficina con Illimani, 720p, alto contraste",
-        "guion": "3 carreras que van a desaparecer en 5 años. Y una que te va a hacer jefe. Adivina cual enseñamos en la UMSA.",
-        "copy": "Tu papa quiere que estudies Derecho. Las empresas quieren que estudies Administracion UMSA. ¿A quien le haras caso? 👀 #UMSA #AdminUMSA #Polemica",
-        "creditos": 20
-    },
-    "mito": {
-        "tipo": "Mito vs Realidad",
-        "prompt_flow": "Video 9:16, 8s, Monoblock UMSA La Paz, estudiante administracion rompiendo pizarron 'ADMIN=ABURRIDO', transicion a CEO oficina, texto 'MITO VS REALIDAD', 720p brillante",
-        "guion": "Te dijeron que administracion es aburrida. En la UMSA te enseñamos a dirigir empresas, no a mirar Excel.",
-        "copy": "Te mintieron sobre Administracion 😱 En UMSA no te enseñamos a ser empleado, te enseñamos a mandar. #MitoVsRealidad #UMSA",
-        "creditos": 20
-    },
-    "noticia": {
-        "tipo": "Noticia Tendencia",
-        "prompt_flow": "Video 9:16, 10s, Monoblock UMSA, graficos IA dinero flotando, estudiante UMSA señalando graficos subiendo, texto 'EMPRESAS BUSCAN ADMINISTRADORES CON IA', estilo viral TikTok, 720p",
-        "guion": "Mientras otras carreras pelean por trabajo, las empresas paceñas estan cazando administradores UMSA que sepan IA.",
-        "copy": "Mientras otros buscan trabajo, a los de Admin UMSA los buscan las empresas 🚀 #NoticiaUMSA #IA #EmpleoLaPaz",
-        "creditos": 20
-    }
+VIDEOS={
+    "noticia":{"tipo":"Noticia Tendencia","prompt":"Video 9:16, 10s, Monoblock UMSA, graficos IA dinero flotando, estudiante UMSA señalando graficos subiendo, texto 'EMPRESAS BUSCAN ADMINISTRADORES CON IA', estilo viral TikTok, 720p","guion":"Mientras otras carreras pelean por trabajo, las empresas paceñas estan cazando administradores UMSA que sepan IA.","copy":"Mientras otros buscan trabajo, a los de Admin UMSA los buscan las empresas 🚀 #NoticiaUMSA #IA","creditos":20}
 }
 
 def generar_video_hoy():
-    # Rotacion por dia
-    la_paz = pytz.timezone("America/La_Paz")
-    hoy = datetime.now(la_paz)
-    dia = hoy.weekday()
-    tipo = "polemico" if dia in [0,3] else "mito" if dia in [1,4] else "noticia"
-    
-    idea = VIDEOS[tipo]
-    
+    la_paz=pytz.timezone("America/La_Paz")
+    hoy=datetime.now(la_paz)
+    idea=VIDEOS["noticia"]
     if not gastar_creditos(idea["creditos"]):
+        print(f"Limite 50 creditos alcanzado: {get_creditos()}/50")
+        enviar_telegram(f"❌ UMSA Agente: Ya use {get_creditos()}/50 creditos hoy. Paro hasta mañana 7am.")
         return
-    
-    # Simula llamada Flow - aqui iria API real de Google Veo
-    print(f"Generando {tipo}: {idea['prompt_flow']}")
-    
-    # Guarda en Notion (simulado - cuando tengas NOTION_TOKEN, descomenta)
-    notion_data = f"Video {idea['tipo']} - {hoy.strftime('%d %b')}: {idea['guion']}"
-    print(f"Guardando en Notion DB {NOTION_DB_ID}: {notion_data}")
-    
-    # Avisa por Telegram
-    mensaje = f"""🎬 *Agente UMSA Admin - Video de hoy {hoy.strftime('%d/%m')}*
+    print(f"Generando noticia: {idea['prompt']}")
+    print(f"Guardando en Notion DB : Video {idea['tipo']} - {hoy.strftime('%d %b')}: {idea['guion']}")
+    msg=f"""🎬 *Agente UMSA Admin - Video de hoy {hoy.strftime('%d/%m %H:%M')}*
 
 Tipo: *{idea['tipo']}*
 Guion: {idea['guion']}
 Copy: {idea['copy']}
-Prompt Flow: `{idea['prompt_flow'][:80]}...`
-Creditos: {idea['creditos']} (Total hoy: {get_creditos()}/{CREDITOS_MAX})
+Prompt Flow: `{idea['prompt'][:90]}...`
+Creditos: {idea['creditos']} (Total hoy: {get_creditos()}/50)
 
-✅ Guardado en Notion 'Videos Admi UMSA - Agente' como *PENDIENTE*
-
-Ve a Notion y cambia Estado a APROBADO para publicar en TikTok/IG/FB via Composio.
-
-Quedan {CREDITOS_MAX-get_creditos()} creditos hoy.
+✅ Guardado en Notion como *PENDIENTE*
+Quedan {50-get_creditos()} creditos hoy.
 """
-    enviar_telegram(mensaje)
-    print("Mensaje enviado a Telegram")
+    ok=enviar_telegram(msg)
+    if ok:
+        print("Mensaje enviado a Telegram")
+    else:
+        print("Fallo envio Telegram")
 
-if __name__ == "__main__":
+if __name__=="__main__":
     generar_video_hoy()
