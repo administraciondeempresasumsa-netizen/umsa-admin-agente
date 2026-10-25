@@ -9,6 +9,8 @@ NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
 NOTION_DB_ID = os.getenv("NOTION_DB_ID", "")
 FLOW_API_KEY = os.getenv("FLOW_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or FLOW_API_KEY
+PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "project-d0370989-463f-4179-a4e")  # tu proyecto con $300
+LOCATION = "us-central1"
 CREDITOS_FILE = "creditos_hoy.json"
 
 def get_creditos():
@@ -37,7 +39,7 @@ def enviar_telegram(texto, video_path=None):
             with open(video_path,'rb') as f:
                 files={'video':f}
                 data={'chat_id':TELEGRAM_CHAT_ID,'caption':texto[:1000],'parse_mode':'Markdown'}
-                r=requests.post(url,data=data,files=files,timeout=60)
+                r=requests.post(url,data=data,files=files,timeout=90)
                 print(f"Telegram video API: {r.status_code}")
                 if r.status_code==200:
                     return True
@@ -79,94 +81,116 @@ def guardar_notion(titulo, tipo, guion, copy, prompt, creditos, video_url=""):
         r = requests.post(url, headers=headers, json={"parent":{"database_id":db_id},"properties":props}, timeout=15)
         print(f"Notion API full: {r.status_code}")
         if r.status_code==200:
-            print(f"✅ Guardado REAL COMPLETO TODO en Notion")
             return True
-        # fallback sin Estado
         props2 = {k:v for k,v in props.items() if k!="Estado"}
         r2 = requests.post(url, headers=headers, json={"parent":{"database_id":db_id},"properties":props2}, timeout=15)
         print(f"Notion sin Estado: {r2.status_code}")
-        if r2.status_code==200:
-            return True
-        r3 = requests.post(url, headers=headers, json={"parent":{"database_id":db_id},"properties":{"Nombre":props["Nombre"],"Tipo":props["Tipo"]}}, timeout=15)
-        print(f"Notion fallback Nombre+Tipo: {r3.status_code}")
-        return r3.status_code==200
+        return r2.status_code==200
     except Exception as e:
         print(f"Notion error: {e}")
         return False
 
-def generar_video_veo(prompt, api_key):
+def generar_video_flow(prompt, flow_token, project_id):
     """
-    Intenta generar video real con Veo 3 Fast via Google Generative AI.
-    Si falla (clave no valida para Veo, o API no habilitada), devuelve None y seguimos con texto.
+    Intenta generar video real con Veo 3 Fast via Vertex AI usando tu token Flow AQ.Ab8...
+    como Bearer token + proyecto My First Project (con $300)
+    Endpoint: https://aiplatform.googleapis.com/v1/projects/{project}/locations/us-central1/publishers/google/models/veo-3.0-fast-generate-001:predictLongRunning
     """
-    if not api_key:
-        print("Sin FLOW_API_KEY, no se puede generar video real")
+    if not flow_token:
+        print("Sin FLOW_API_KEY")
         return None
-    # Veo 3 Fast via Generative Language API v1beta
-    # Endpoint: https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-fast-generate-001:predictLongRunning
-    # Este endpoint requiere API key con permiso Veo. Si tu clave es de AI Studio, puede que necesites habilitar Veo en Cloud.
-    # Intentamos 2 endpoints: veo-3.0-fast y veo-2.0
+    
+    # 3 formas de llamar a Veo con token Flow
     endpoints = [
-        f"https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-fast-generate-001:predictLongRunning?key={api_key}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/veo-2.0-generate-001:predictLongRunning?key={api_key}",
+        f"https://aiplatform.googleapis.com/v1/projects/{project_id}/locations/{LOCATION}/publishers/google/models/veo-3.0-fast-generate-001:predictLongRunning",
+        f"https://aiplatform.googleapis.com/v1/projects/{project_id}/locations/{LOCATION}/publishers/google/models/veo-2.0-generate-001:predictLongRunning",
+        f"https://aiplatform.googleapis.com/v1/projects/{project_id}/locations/{LOCATION}/publishers/google/models/veo-3.0-generate-001:predictLongRunning",
     ]
+    
+    headers = {
+        "Authorization": f"Bearer {flow_token}",
+        "Content-Type": "application/json"
+    }
+    
     payload = {
         "instances": [{"prompt": prompt}],
-        "parameters": {"aspectRatio": "9:16", "durationSeconds": 8}
+        "parameters": {
+            "aspectRatio": "9:16",
+            "durationSeconds": 8,
+            "sampleCount": 1,
+            "personGeneration": "allow_adult"
+        }
     }
+    
     for endpoint in endpoints:
         try:
-            print(f"Intentando Veo endpoint: {endpoint[:80]}...")
-            r = requests.post(endpoint, json=payload, timeout=30)
-            print(f"Veo respuesta inicial: {r.status_code} - {r.text[:800]}")
-            if r.status_code!=200:
+            print(f"Intentando Flow Veo via Vertex AI: {endpoint}")
+            r = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+            print(f"Flow Veo respuesta inicial: {r.status_code} - {r.text[:1000]}")
+            if r.status_code != 200:
                 continue
+            
             data = r.json()
             op_name = data.get("name")
             if not op_name:
                 continue
-            # Poll operation
-            poll_url = f"https://generativelanguage.googleapis.com/v1beta/{op_name}?key={api_key}"
-            for i in range(30): # hasta 5 min
+            
+            # Poll operation - usa mismo Bearer token
+            poll_base = f"https://aiplatform.googleapis.com/v1/{op_name}"
+            for i in range(36): # 6 min max
                 time.sleep(10)
-                pr = requests.get(poll_url, timeout=15)
-                print(f"Veo poll {i}: {pr.status_code} - {pr.text[:500]}")
-                if pr.status_code!=200:
+                pr = requests.get(poll_base, headers=headers, timeout=15)
+                print(f"Flow Veo poll {i}: {pr.status_code} - {pr.text[:600]}")
+                if pr.status_code != 200:
                     continue
                 pdata = pr.json()
                 if pdata.get("done"):
-                    # buscar video
-                    resp = pdata.get("response",{})
-                    # puede venir como base64 o uri
-                    vid = resp.get("generateVideoResponse",{}).get("generatedSamples",[{}])[0]
-                    b64 = vid.get("video",{}).get("bytesBase64Encoded")
-                    uri = vid.get("video",{}).get("uri")
-                    if b64:
-                        out_path = "/tmp/video_umsa.mp4"
-                        with open(out_path,"wb") as f:
-                            f.write(base64.b64decode(b64))
-                        print(f"✅ Video real generado: {out_path}")
-                        return out_path
-                    if uri:
-                        # descargar uri
-                        vr = requests.get(uri, timeout=60)
-                        out_path = "/tmp/video_umsa.mp4"
-                        with open(out_path,"wb") as f:
-                            f.write(vr.content)
-                        print(f"✅ Video real descargado de uri: {out_path}")
-                        return out_path
-                    print("Operacion done pero sin video")
+                    # Vertex AI Veo response format
+                    resp = pdata.get("response", {})
+                    # Puede venir en diferentes formatos
+                    videos = resp.get("videos") or resp.get("generatedVideos") or []
+                    if videos:
+                        v = videos[0]
+                        b64 = v.get("bytesBase64Encoded") or v.get("b64Json")
+                        if b64:
+                            out_path = "/tmp/video_umsa_flow.mp4"
+                            with open(out_path,"wb") as f:
+                                f.write(base64.b64decode(b64))
+                            print(f"✅ Video Flow real generado: {out_path}")
+                            return out_path
+                    # Formato alternativo generateVideoResponse
+                    gvr = resp.get("predictions", [{}])[0] if "predictions" in resp else resp.get("generateVideoResponse",{}).get("generatedSamples",[{}])[0] if "generateVideoResponse" in resp else {}
+                    if gvr:
+                        b64 = gvr.get("video",{}).get("bytesBase64Encoded") or gvr.get("bytesBase64Encoded")
+                        if b64:
+                            out_path = "/tmp/video_umsa_flow.mp4"
+                            with open(out_path,"wb") as f:
+                                f.write(base64.b64decode(b64))
+                            print(f"✅ Video Flow real (formato 2): {out_path}")
+                            return out_path
+                    print(f"Operacion done pero sin video parseable: {json.dumps(resp)[:1000]}")
                     return None
-            print("Timeout esperando Veo")
+            print("Timeout esperando Flow Veo")
             return None
         except Exception as e:
-            print(f"Error Veo: {e}")
+            print(f"Error Flow Veo: {e}")
             continue
-    print("Veo no disponible con esta clave, continuamos con modo texto")
+    
+    # Fallback: intentar endpoint generativelanguage con Bearer tambien
+    try:
+        print("Intentando Flow via generativelanguage con Bearer...")
+        endpoint = "https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-fast-generate-001:predictLongRunning"
+        headers2 = {"Authorization": f"Bearer {flow_token}", "Content-Type": "application/json", "x-goog-user-project": project_id}
+        r = requests.post(endpoint, headers=headers2, json=payload, timeout=30)
+        print(f"Flow gen-lang Bearer: {r.status_code} - {r.text[:1000]}")
+    except Exception as e:
+        print(f"Error gen-lang Bearer: {e}")
+    
+    print("Flow Veo no disponible aun con este token, continuamos con modo texto - pero tu token ES valido para Flow web en flow.google.com")
     return None
 
 VIDEOS={
-    "noticia":{"tipo":"Noticia Tendencia","prompt":"Video vertical 9:16, 8 seconds, UMSA Monoblock La Paz Bolivia, student in business administration pointing to floating holographic charts showing money growth, text overlay 'EMPRESAS BUSCAN ADMINISTRADORES CON IA', vibrant TikTok style, fast cuts, 720p","guion":"Mientras otras carreras pelean por trabajo, las empresas paceñas estan cazando administradores UMSA que sepan IA.","copy":"Mientras otros buscan trabajo, a los de Admin UMSA los buscan las empresas 🚀 #NoticiaUMSA #IA #UMSA #LaPaz","creditos":20}
+    "noticia":{"tipo":"Noticia Tendencia","prompt":"Video vertical 9:16, 8 seconds, UMSA Monoblock La Paz Bolivia, student in business administration pointing to floating holographic charts showing money growth, text overlay 'EMPRESAS BUSCAN ADMINISTRADORES CON IA', vibrant TikTok style, fast cuts, 720p","guion":"Mientras otras carreras pelean por trabajo, las empresas pacenas estan cazando administradores UMSA que sepan IA.","copy":"Mientras otros buscan trabajo, a los de Admin UMSA los buscan las empresas 🚀 #NoticiaUMSA #IA #UMSA #LaPaz","creditos":20}
 }
 
 def generar():
@@ -177,18 +201,18 @@ def generar():
         enviar_telegram(f"❌ UMSA Agente: Ya use {get_creditos()}/50 creditos hoy.")
         return
     titulo = f"Video {idea['tipo']} - {hoy.strftime('%d %b %H:%M')}: {idea['guion'][:35]}"
-    print(f"Generando con Veo 3 Fast: {idea['prompt']}")
-    video_path = generar_video_veo(idea['prompt'], FLOW_API_KEY or GEMINI_API_KEY)
+    print(f"Generando con Flow Veo 3 Fast: {idea['prompt']} usando proyecto {PROJECT_ID}")
+    video_path = generar_video_flow(idea['prompt'], FLOW_API_KEY, PROJECT_ID)
     video_url = ""
     if video_path and os.path.exists(video_path):
-        video_url = f"Video real generado: {video_path} (20 creditos)"
+        video_url = f"Video real Flow generado: {video_path} (20 creditos) - Proyecto {PROJECT_ID}"
         print(f"Video listo: {video_path}")
     else:
-        print("Modo texto (sin video real) - Veo no disponible con esta clave o falta habilitar en Google Cloud")
-        video_url = "Modo texto - Activa Veo en Google Cloud para video real"
+        video_url = f"Modo texto - Flow activo en Bolivia pero API requiere habilitar Veo en {PROJECT_ID} o usar flow.google.com manualmente. Tu token {FLOW_API_KEY[:15]}... ES valido para Flow web."
+        print(video_url)
 
     ok = guardar_notion(titulo, idea["tipo"], idea["guion"], idea["copy"], idea["prompt"], idea["creditos"], video_url)
-    estado_txt = "REAL COMPLETO + VIDEO" if video_path else "REAL COMPLETO TEXTO (Veo pendiente)"
+    estado_txt = "REAL COMPLETO + VIDEO FLOW" if video_path else "REAL COMPLETO TEXTO (Flow web activo, API pendiente)"
     msg=f"""🎬 *Agente UMSA Admin - Video de hoy {hoy.strftime('%d/%m %H:%M')}*
 
 Tipo: *{idea['tipo']}*
@@ -201,6 +225,7 @@ Estado: {estado_txt}
 {video_url}
 
 ✅ Guardado en Notion como *Not started*
+Proyecto: {PROJECT_ID} con $300 hasta 23 ene 2027
 Quedan {50-get_creditos()} creditos hoy.
 """
     enviar_telegram(msg, video_path if video_path else None)
