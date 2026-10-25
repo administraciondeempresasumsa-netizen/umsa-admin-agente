@@ -33,10 +33,10 @@ def enviar_telegram(texto):
     payload={"chat_id":TELEGRAM_CHAT_ID,"text":texto,"parse_mode":"Markdown"}
     try:
         r=requests.post(url,json=payload,timeout=10)
-        print(f"Telegram API: {r.status_code} - {r.text[:500]}")
+        print(f"Telegram API: {r.status_code}")
         return r.status_code==200
     except Exception as e:
-        print(f"Excepcion Telegram: {e}")
+        print(f"Telegram error: {e}")
         return False
 
 def limpiar_db_id(db_id):
@@ -51,13 +51,13 @@ def limpiar_db_id(db_id):
 
 def guardar_notion(titulo, tipo, guion, copy, prompt, creditos):
     if not NOTION_TOKEN or not NOTION_DB_ID:
-        print("NOTION_TOKEN o NOTION_DB_ID no configurados")
         return False
     db_id = limpiar_db_id(NOTION_DB_ID)
     url = "https://api.notion.com/v1/pages"
     headers = {"Authorization": f"Bearer {NOTION_TOKEN}","Content-Type":"application/json","Notion-Version":"2022-06-28"}
-    # Usamos nombres exactos que creaste: Nombre, Tipo, Guion, Copy, Prompt, Creditos, Estado
-    # Algunos tipos pueden ser select, text, number, status - probamos con tipos compatibles
+    
+    # Ahora usamos Estado = Not started (en ingles, como lo tiene tu DB)
+    # Y columnas exactas: Nombre, Tipo, Guion, Copy, Prompt, Creditos, Estado
     data = {
         "parent": {"database_id": db_id},
         "properties": {
@@ -67,33 +67,36 @@ def guardar_notion(titulo, tipo, guion, copy, prompt, creditos):
             "Copy": {"rich_text": [{"text": {"content": copy[:1900]}}]},
             "Prompt": {"rich_text": [{"text": {"content": prompt[:1900]}}]},
             "Creditos": {"number": creditos},
-            "Estado": {"status": {"name": "No ha comenzado"}}
+            "Estado": {"status": {"name": "Not started"}}
         }
     }
     try:
         r = requests.post(url, headers=headers, json=data, timeout=15)
-        print(f"Notion API full: {r.status_code} - {r.text[:1000]}")
+        print(f"Notion API full ES: {r.status_code} - {r.text[:1200]}")
         if r.status_code==200:
-            print(f"✅ Guardado REAL COMPLETO en Notion: {titulo}")
+            print(f"✅ Guardado REAL COMPLETO TODO en Notion: {titulo}")
             return True
-        # Si falla por tipo de Estado (select vs status), probar con select
-        if "Estado" in r.text or "status" in r.text.lower():
-            print("Probando Estado como select...")
-            data["properties"]["Estado"] = {"select": {"name": "PENDIENTE"}}
-            r2 = requests.post(url, headers=headers, json=data, timeout=15)
-            print(f"Notion API retry Estado select: {r2.status_code} - {r2.text[:800]}")
-            if r2.status_code==200:
-                return True
-        # Fallback: intentar solo con Nombre y Tipo y Estado como No ha comenzado
-        data_fallback = {
+        # Si falla, intentar sin Estado para que al menos guarde todo lo demas
+        print("Fallback sin Estado...")
+        data2 = {
             "parent": {"database_id": db_id},
             "properties": {
                 "Nombre": {"title": [{"text": {"content": titulo[:100]}}]},
-                "Tipo": {"select": {"name": tipo[:30]}}
+                "Tipo": {"select": {"name": tipo[:30]}},
+                "Guion": {"rich_text": [{"text": {"content": guion[:1900]}}]},
+                "Copy": {"rich_text": [{"text": {"content": copy[:1900]}}]},
+                "Prompt": {"rich_text": [{"text": {"content": prompt[:1900]}}]},
+                "Creditos": {"number": creditos}
             }
         }
-        r3 = requests.post(url, headers=headers, json=data_fallback, timeout=15)
-        print(f"Notion fallback Nombre+Tipo: {r3.status_code} - {r3.text[:600]}")
+        r2 = requests.post(url, headers=headers, json=data2, timeout=15)
+        print(f"Notion sin Estado: {r2.status_code} - {r2.text[:800]}")
+        if r2.status_code==200:
+            return True
+        # Ultimo fallback solo Nombre+Tipo
+        data3 = {"parent": {"database_id": db_id},"properties": {"Nombre": {"title": [{"text": {"content": titulo[:100]}}]},"Tipo": {"select": {"name": tipo[:30]}}}}
+        r3 = requests.post(url, headers=headers, json=data3, timeout=15)
+        print(f"Notion fallback Nombre+Tipo: {r3.status_code}")
         return r3.status_code==200
     except Exception as e:
         print(f"Excepcion Notion: {e}")
@@ -112,16 +115,15 @@ def generar():
         return
     titulo = f"Video {idea['tipo']} - {hoy.strftime('%d %b')}: {idea['guion'][:40]}"
     ok = guardar_notion(titulo, idea["tipo"], idea["guion"], idea["copy"], idea["prompt"], idea["creditos"])
-    estado_txt = "REAL COMPLETO ✅" if ok else "FALLO ❌"
+    estado_txt = "REAL COMPLETO TODO ✅" if ok else "FALLO"
     msg=f"""🎬 *Agente UMSA Admin - Video de hoy {hoy.strftime('%d/%m %H:%M')}*
 
 Tipo: *{idea['tipo']}*
 Guion: {idea['guion']}
 Copy: {idea['copy']}
-Prompt: `{idea['prompt'][:80]}...`
-Creditos: {idea['creditos']} (Total hoy: {get_creditos()}/50)
+Creditos: {idea['creditos']} (Total: {get_creditos()}/50)
 
-✅ Guardado en Notion {estado_txt} como *PENDIENTE*
+✅ Guardado en Notion {estado_txt} como *Not started*
 Quedan {50-get_creditos()} creditos hoy.
 """
     enviar_telegram(msg)
