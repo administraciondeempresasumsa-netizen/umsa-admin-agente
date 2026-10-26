@@ -91,30 +91,36 @@ def guardar_notion(titulo, tipo, guion, copy, prompt, creditos, video_url=""):
         return False
 
 def get_oauth_token_from_json(json_str):
-    """Genera OAuth token desde tu VERTEX_CREDENTIALS JSON de umsa-veo-agent"""
+    """Genera OAuth token desde tu VERTEX_CREDENTIALS JSON de umsa-veo-agent - FIXED"""
     try:
-        # Guarda JSON temporal
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tf:
-            tf.write(json_str)
-            tf_path = tf.name
-        
-        # Intenta con google-auth
+        # Limpia el JSON string (puede venir con saltos)
+        json_str = json_str.strip()
+        data = json.loads(json_str)
+        print(f"VERTEX JSON cargado: {data.get('client_email')} proyecto {data.get('project_id')}")
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import Request
+        creds = service_account.Credentials.from_service_account_info(data, scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        creds.refresh(Request())
+        print(f"OAuth token generado via google-auth INFO: {creds.token[:25]}... valido por {creds.expiry}")
+        return creds.token
+    except Exception as e:
+        print(f"Error generando OAuth token desde INFO: {e}")
         try:
+            # Fallback: archivo temporal
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as tf:
+                tf.write(json_str)
+                tf_path = tf.name
             from google.oauth2 import service_account
             from google.auth.transport.requests import Request
             creds = service_account.Credentials.from_service_account_file(tf_path, scopes=["https://www.googleapis.com/auth/cloud-platform"])
             creds.refresh(Request())
-            print(f"OAuth token generado via google-auth: {creds.token[:20]}...")
+            print(f"OAuth token generado via FILE: {creds.token[:25]}...")
             os.unlink(tf_path)
             return creds.token
-        except Exception as e:
-            print(f"google-auth no disponible, intento con gcloud style: {e}")
-            # Fallback: usa directamente el private key para JWT? Simplificado: intenta con requests
-            os.unlink(tf_path)
+        except Exception as e2:
+            print(f"Error fallback FILE tambien: {e2}")
             return None
-    except Exception as e:
-        print(f"Error generando OAuth token: {e}")
-        return None
 
 def generar_video_flow(prompt, project_id, vertex_json):
     """Genera video real con Veo 3 Fast via Vertex AI usando tu VERTEX_CREDENTIALS JSON"""
